@@ -1,0 +1,99 @@
+<script src="./a.out.js"></script>
+<!-- js是为了给浏览器加载js文件，js里面是胶水代码，以及wasm导出的代码 -->
+<!-- 它用来引入外部JavaScript文件到当前页面。 -->
+<!-- .out.js文件中包含了WebAssembly模块的加载逻辑以及JavaScript与WebAssembly交互的桥接代码。 -->
+<script>
+  //onRuntimeInitialized是一个回调函数，当WebAssembly模块初始化完成并准备好调用时会被触发。
+  /*
+  Module.onRuntimeInitialized = async () => {
+    //定义了一个名为api的常量对象，该对象中包含了对WebAssembly模块中导出函数的引用。
+    //定义了一个名为api的常量对象
+    const api = {
+      //这里是通过Emscripten的cwrap方法包装了WebAssembly模块中的一个函数version。
+      version: Module.cwrap("version", "number", []) //用于创建一个易于从JavaScript调用的WebAssembly函数的包装器
+    };
+    console.log(api.version()); //调用通过api对象包装的version函数，并将结果打印到浏览器的控制台。
+  }
+  */
+</script>
+<script>
+  async function loadImage(src) {
+    //load image
+    //如果一个操作不需要立即结果来决定后续逻辑，或者可以并行执行以提高效率，那么直接使用Promise链式调用（.then）或使用Promise.all来并行处理多个Promise可能更合适。
+    //因为await会使代码暂停执行直到Promise解析，这可能导致不必要的阻塞。如果后续代码逻辑依赖于前一个异步操作的结果，这时使用await是非常合适的，因为它确保了在继续执行下一行代码之前，当前的异步操作已完成。不同的团队或项目可能有不同的编码规范，有的倾向于尽可能使用await来保持代码的一致性和可读性，而有的可能更注重性能优化，避免不必要的阻塞。
+    //在追求代码清晰度和可维护性的场景下，await很有价值；而在性能敏感或需要并行处理的场景，则可能需要更精细地控制异步流程。
+    //Blob对象是一个二进制数据对象，它表示一个不可变、原始数据的类文件对象。
+    const imgBlob = await fetch(src).then((resp) => resp.blob()); //调用这个响应对象的blob()方法会返回一个新的Promise，这个Promise在Blob对象被创建并包含请求到的资源数据时解析完成。
+    const img = await createImageBitmap(imgBlob);
+    //Make canvas same size as image
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    //Draw image onto canvas
+    const ctx = canvas.getContext('2d'); //幸运的是，Canvas API有 CanvasRenderingContext2D.getImageData -它为您提供了一个包含RGBA中图像数据的 Uint8ClampedArray 
+    ctx.drawImage(img, 0, 0); //这行代码获取了HTML <canvas> 元素的2D渲染上下文，允许你在画布上进行绘图操作。
+    //document.body.appendChild(canvas); // 将canvas添加到body元素中
+    return ctx.getImageData(0, 0, img.width, img.height); //Uint8ClampedArray是一个一维数组，用于表示8位无符号整数（0-255）。这个数组的特点是，当赋值给数组元素的值超出了0-255的范围时，它会自动将值限制在这个范围内。例如，如果赋值为256，它会被自动转换为255；如果赋值为-1，它会被自动转换为0。
+  }
+
+  // 确保所有的API定义都在一起，并且在使用前执行
+  //let api; // 声明api变量
+  //声明wasm模块的函数，.a.out.js只是一些胶水代码，并没有wasm模块里面的函数
+  const api = {
+    version: Module.cwrap("version", "number", []),
+    create_buffer: Module.cwrap("create_buffer", "number", ["number", "number"]),
+    destroy_buffer: Module.cwrap("destroy_buffer", "", ["number"]),
+    encode: Module.cwrap("encode", "", ["number", "number", "number", "number"]),
+    free_result: Module.cwrap("free_result", "", ["number"]),
+    get_result_pointer: Module.cwrap("get_result_pointer", "number", []),
+    get_result_size: Module.cwrap("get_result_size", "number", []),
+  };
+  async function init() {
+    try {
+      const image = await loadImage("./image.jpg");
+      const p = api.create_buffer(image.width, image.height);
+      // 在这里处理image，例如将其数据显示在页面上或者其他操作
+      //console.log(image);
+      //Module.HEAP8: 在 Emscripten 环境中，HEAP8 是一个 Uint8Array（无符号 8 位整数数组），它是 WebAssembly 内存空间的一个视图。
+      //Emscripten 提供了多个这样的 HEAP 对象 (HEAP8, HEAP16, HEAP32, HEAPF32, HEAPF64 等)，分别对应不同大小的数值类型，允许 JavaScript 代码直接访问和修改 WebAssembly 管理的内存。HEAP8 特别适合处理字节级别的数据操作。
+      //Module.HEAP8.set(image.data, p); 这行代码的作用是将 image.data 中的数据复制到 WebAssembly 内存的 p 地址开始的位置。这种操作常见于需要将JavaScript处理的数据高效传给WebAssembly模块进行进一步处理的场景，比如图像处理、音频处理等高性能计算任务。
+      Module.HEAP8.set(image.data, p); //WebAssembly 内存的 p 地址开始的位置
+      // ... call encoder ...
+      api.encode(p, image.width, image.height, 100);
+      const resultSize = api.get_result_size();
+      const resultPointer = api.get_result_pointer();
+      const resultView = new Uint8Array(
+        Module.HEAP8.buffer,
+        resultPointer,
+        resultSize,
+      ); //这行代码创建了一个新的Uint8Array视图，它直接映射到WebAssembly分配的内存空间。Module.HEAP8.buffer提供了对WebAssembly内存的底层缓冲区访问，resultPointer是之前获取的结果数据起始地址，resultSize指定了视图的长度。这样，resultView就直接指向了WebAssembly中编码结果所在的内存区域，可以用于读取这些数据。
+      const result = new Uint8Array(resultView); //new Uint8Array(someBuffer) 将在同一内存块上创建一个新视图，而 new Uint8Array(someTypedArray) 将复制数据。复制数据到了js空间世界。这行代码实际上创建了resultView的一个副本，一个新的Uint8Array。虽然这个操作在技术上创建了一个新数组，但由于它通常用来简化代码或避免直接修改原始视图，实际应用中可能并不总是必需。直接使用resultView也可以达到同样的目的，除非你有特定理由需要一个独立的副本。
+      api.free_result(resultPointer); //调用free_result函数来释放之前分配给编码结果的WebAssembly内存。这是非常重要的步骤，以避免内存泄漏，确保WebAssembly内存得到适当的管理。
+      api.destroy_buffer(p); //这个是把存储图像的数据清理了，这个是wasm的内存空间
+
+      //你已经编译了一个WebP编码器，并将一个JPEG图像转码为WebP。为了证明它有效，将结果缓冲区转换为一个blob，并在 <img> 元素上使用它：
+      //Blob 对象表示一个不可变的、原始数据的类文件对象，通常用于存储二进制数据，如图片、音频或视频等。在 JavaScript 中，使用 Blob 构造函数可以创建一个新的 Blob 实例。
+      //Blob构造函数接收一个数组作为参数，数组中的元素可以是 ArrayBuffer、ArrayBufferView、Blob、String 或者 USVString（Unicode 字符序列）对象。在你的例子中，result 应该是一个 Uint8Array 或其他能够表示二进制数据的类型，代表了要封装进 Blob 的实际数据内容。
+      const blob = new Blob([result], { type: "image/webp" }); //虽然 Blob 本身可以不指定 type 而被创建，但在处理特定类型的数据（如图片、音频、视频等）时，明确指定 type 是一个好的实践，它有助于提高程序的健壮性和兼容性。
+      const blobURL = URL.createObjectURL(blob);
+      const img = document.createElement("img");
+      img.src = blobURL;
+      img.alt = "a useful description";
+      document.body.appendChild(img);
+    } catch (error) {
+      console.error('Error loading image:', error);
+    }
+  }
+
+  // 确保DOM已经加载完成再执行init函数，避免在文档未完全加载时尝试操作DOM
+  //document.addEventListener('DOMContentLoaded', init);
+  // 当DOM加载完成时，检查Module是否已经初始化完毕，如果是，则调用init；否则，等待onRuntimeInitialized事件
+  if (Module && Module.onRuntimeInitialized) {
+    init();
+  } else {
+    //document.addEventListener('DOMContentLoaded', init);
+  }
+  Module.onRuntimeInitialized = async () => {
+    init();
+  }
+</script>
